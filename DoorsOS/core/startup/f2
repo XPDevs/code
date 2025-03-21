@@ -1,0 +1,6 @@
+At boot prompt enter one of the options:
+Press F1 to return 
+
+ halt           This will halt the computer
+ reboot         This will reboot the computer
+ memtest        This will start testing your computers memory
