@@ -1,0 +1,232 @@
+#!/bin/bash
+# Function to display an error message
+function show_error() {
+    echo "Error: $1"
+}
+
+# Function to display a message
+function show_message() {
+    echo "$1"
+}
+
+# Function to display the loading bar
+loading_bar() {
+    local total=100
+    local progress=0
+    local bar=""
+    local filled=""
+    local empty=""
+
+    # Loop to update the progress
+    while [ $progress -le $total ]; do
+        # Calculate how many # symbols to display based on progress
+        filled=$(printf "%0.s#" $(seq 1 $((progress / 2))))
+        empty=$(printf "%0.s " $(seq 1 $((total / 2 - progress / 2))))
+
+        # Build the bar with # and spaces
+        bar="[$filled$empty]"
+
+        # Print the bar on the same line
+        printf "\r$bar $progress%%"
+
+        # Increment progress
+        ((progress++))
+        sleep 0.1  # Simulate work being done
+    done
+    echo  # To move to the next line after loading is complete
+}
+
+# Function to compile ASM file to BIN
+function compile_asm() {
+    local asm_file="$1"
+    local bin_file="${asm_file%.asm}.bin"
+    
+    # Start the loading bar while compiling
+    show_message "Compiling ASM file..."
+    loading_bar  # Display loading bar during compilation
+
+    # Compile the ASM file using nasm
+    nasm -f bin -o "$bin_file" "$asm_file"
+    
+    if [ $? -eq 0 ]; then
+        show_message "ASM file compiled successfully: $bin_file"
+    else
+        show_error "Failed to compile ASM file: $asm_file"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to create the bootable ISO (as in the original script)
+function create_iso() {
+    USER_DESKTOP=$(xdg-user-dir DESKTOP)
+
+    if [ -z "$USER_DESKTOP" ]; then
+        show_error "Unable to find the Desktop directory."
+        return 1
+    fi
+
+    # Delete all ISO files on the Desktop
+    echo "Deleting all ISO files on the Desktop..."
+    find "$USER_DESKTOP" -type f -name "*.iso" -exec rm -f {} \;
+    if [ $? -eq 0 ]; then
+        show_message "All ISO files on the Desktop have been deleted."
+    else
+        show_error "Failed to delete ISO files on the Desktop."
+        return 1
+    fi
+
+    # Ask the user for the ISO name
+    read -p "ISO Name >>> " OUTPUT_ISO_NAME
+    OUTPUT_ISO="${OUTPUT_ISO_NAME}.iso"
+
+    if [ ! -f "isolinux/isolinux.bin" ]; then
+        show_error "isolinux/isolinux.bin not found."
+        return 1
+    fi
+
+    # Create the ISO image
+    show_message "Creating bootable ISO..."
+    loading_bar  # Display loading bar during ISO creation
+
+    genisoimage -o "$OUTPUT_ISO" \
+        -b isolinux/isolinux.bin \
+        -c isolinux/boot.cat \
+        -no-emul-boot \
+        -boot-load-size 4 \
+        -boot-info-table \
+        -R -J -V "BootableISO" .
+
+    if [ $? -eq 0 ]; then
+        show_message "Bootable ISO created successfully: $OUTPUT_ISO"
+    else
+        show_error "Failed to create ISO."
+        return 1
+    fi
+
+    cp "$OUTPUT_ISO" "$USER_DESKTOP"
+    show_message "ISO copied to the Desktop: $USER_DESKTOP/$OUTPUT_ISO"
+
+    rm "$OUTPUT_ISO"
+
+    read -p "Do you want to run the ISO in QEMU? (y/n): " USER_RESPONSE
+    if [[ "$USER_RESPONSE" =~ ^[Yy]$ ]]; then
+        if ! command -v qemu-system-x86_64 &> /dev/null; then
+            show_error "QEMU is not installed. Please install QEMU and try again."
+            return 1
+        fi
+        echo "QEMU has started the emulation"
+        qemu-system-x86_64 -cdrom "$USER_DESKTOP/$OUTPUT_ISO" -boot d
+        echo "Returning to prompt"
+        sleep 1 
+    else
+        show_message "ISO creation complete. You can manually run the ISO from the Desktop."
+    fi
+}
+
+# Main loop (as in the original script)
+clear  # Clear the terminal screen when the script starts
+echo "Welcome to BASM. For help type 'help'"
+
+# Ask for the main OS folder
+read -p "Enter the path to the main OS folder: " MAIN_OS_FOLDER
+
+# Check if the directory exists
+if [ ! -d "$MAIN_OS_FOLDER" ]; then
+    show_error "The specified directory does not exist: $MAIN_OS_FOLDER"
+    exit 1
+fi
+
+# Change to the OS folder
+cd "$MAIN_OS_FOLDER" || exit 1
+echo "Changed to the main OS directory: $MAIN_OS_FOLDER"
+
+while true; do
+    # Display prompt
+    echo -n ">>> "
+    read USER_COMMAND
+
+    case "$USER_COMMAND" in
+        compile)
+            # Ask if it's Assembly or Custom language
+            echo "Is this for:"
+            echo "1. Assembly"
+            echo "2. Custom language"
+            read -p "Enter your choice (1 or 2): " COMPILER_TYPE
+
+            case "$COMPILER_TYPE" in
+                1)
+                    # Prompt for the ASM file path
+                    read -p "ASM File >>> " ASM_FILE
+
+                    # Check if the ASM file exists
+                    if [ ! -f "$ASM_FILE" ]; then
+                        show_error "ASM file '"$ASM_FILE"' not found"
+                        continue
+                    fi
+
+                    # Compile the ASM file using nasm
+                    compile_asm "$ASM_FILE"
+                    ;;
+
+                2)
+                    # For custom language, just output "test123"
+                    echo "test123"
+                    ;;
+
+                *)
+                    show_error "Invalid choice. Please enter 1 for Assembly or 2 for Custom language."
+                    ;;
+            esac
+            ;;
+
+        iso)
+            # Ask if the user wants to create the ISO
+            create_iso
+            ;;
+
+        run)
+            # Run the ISO file in QEMU
+            run_iso
+            ;;
+
+        exit)
+            # Exit the script
+            show_message "Exiting the script"
+            sleep 2
+            exit 0
+            ;;
+
+        help)
+            # Show the help message
+            show_message "Commands available: compile, iso, run"
+            ;;
+
+        clear)
+            # Clear the terminal screen
+            clear
+            ;;
+
+        ls)
+            # List files and directories in the current directory or specified directory
+            read -p "Enter directory path (or press Enter to list the current directory): " DIR_PATH
+            if [ -z "$DIR_PATH" ]; then
+                # If no directory is provided, list the current directory
+                ls
+            else
+                # List the specified directory
+                if [ -d "$DIR_PATH" ]; then
+                    ls "$DIR_PATH"
+                else
+                    show_error "Directory not found: $DIR_PATH"
+                fi
+            fi
+            ;;
+
+        *)
+            show_error "Invalid command. Available commands: compile, iso, run"
+            ;;
+    esac
+done
+
